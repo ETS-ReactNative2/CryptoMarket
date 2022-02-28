@@ -1,0 +1,15 @@
+.middlesection-canvas {
+  margin-top: 3rem;
+  padding: 4rem;
+  background: #fff;
+  min-width: 100vw;
+}
+
+.middlesection-h1 {
+  text-align: center;
+  font-size: 50px;
+}
+
+.touch-container {
+  margin-top: 2rem;
+}
