@@ -6,6 +6,8 @@ const schema = new mongoose.Schema({
 	lastName: String,
 	fiatBalance: Number,
 	passwordHash: String,
+	aboutMe: String,
+	imageProfile: String,
 	watchListCoins: [String],
 
 	transactionHistory: [

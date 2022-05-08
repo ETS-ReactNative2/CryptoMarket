@@ -1,4 +1,4 @@
-const { ApolloServer, UserInputError, AuthenticationError, gql } = require('apollo-server');
+const { ApolloServer, UserInputError, AuthenticationError, gql } = require('apollo-server-express');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const Coin = require('./models/coin');
@@ -6,7 +6,8 @@ const User = require('./models/users');
 const PortfolioCoin = require('./models/portfolioCoin'); // INFO of the portfolio
 const PortfolioValueDate = require('./models/portfolioValueDate'); //Dates of each of the portfolio vvalue
 const SendReceiveHistory = require('./models/sendReceiveHistory');
-const { GraphQLUpload } = require('graphql-upload');
+const { GraphQLUpload, graphqlUploadExpress } = require('graphql-upload');
+const express = require('express');
 
 const path = require('path');
 const fs = require('fs');
@@ -31,6 +32,11 @@ mongoose
 	});
 const typeDefs = gql`
 	scalar Upload
+	type changeProfileDetails {
+		lastName: String
+		aboutMe: String
+		name: String
+	}
 	type PortfolioValueDate {
 		assetValueTotal: Float!
 		date: String!
@@ -66,6 +72,8 @@ const typeDefs = gql`
 		name: String!
 		lastName: String!
 		username: String!
+		imageProfile: String!
+		aboutMe: String
 		transactionHistory: [Coin!]
 		watchListCoins: [String!]
 		portfolioCoins: [PortfolioCoin!]
@@ -96,7 +104,11 @@ const typeDefs = gql`
 		addPortfolioDateValue(assetValueTotal: Float!): PortfolioValueDate!
 		sellMarketCoin(name: String!, sell_price: Float!, quantity: Float!): Coin!
 		sendUser(username: String!, quantity: Float!, name: String!): String
-		uploadFile(file: Upload!): File!
+		changeProfilePicture(file: Upload!): File!
+		changeName(name: String!): String!
+		changeLastName(lastName: String!): String!
+		changeAboutMe(sentence: String!): String!
+		changeProfile(name: String!, lastName: String!, aboutMe: String!): String
 	}
 `;
 
@@ -127,6 +139,8 @@ const resolvers = {
 				passwordHash,
 				name: args.name,
 				lastName: args.lastName,
+				aboutMe: '',
+				imageProfile: 'http:localhost:4000/images/default_profile.png',
 				fiatBalance: 10000,
 			});
 
@@ -392,40 +406,111 @@ const resolvers = {
 			}
 			return args.name;
 		},
-		uploadFile: async (parent, { file }) => {
-			const { createReadStream, filename, mimetype, encoding } = await file;
+		changeProfilePicture: async (roots, args, context) => {
+			const currentUser = context.currentUser;
+
+			if (!currentUser) {
+				throw new AuthenticationError('not authenticated');
+			}
+			const { createReadStream, filename, mimetype, encoding } = await args.file;
 
 			const stream = createReadStream();
 			const pathName = path.join(__dirname, `/public/images/${filename}`);
 
 			await stream.pipe(fs.createWriteStream(pathName));
-
+			currentUser.imageProfile = `http://localhost:4000/images/${filename}`;
+			currentUser.save();
 			return {
 				url: `http://localhost:4000/images/${filename}`,
 			};
 		},
+		changeName: async (roots, args, context) => {
+			const currentUser = context.currentUser;
+
+			if (!currentUser) {
+				throw new AuthenticationError('not authenticated');
+			}
+
+			currentUser.name = args.name;
+			currentUser.save();
+
+			return args.name;
+		},
+		changeLastName: async (roots, args, context) => {
+			const currentUser = context.currentUser;
+
+			if (!currentUser) {
+				throw new AuthenticationError('not authenticated');
+			}
+
+			currentUser.lastName = args.lastName;
+			currentUser.save();
+
+			return args.lastName;
+		},
+		changeAboutMe: async (roots, args, context) => {
+			const currentUser = context.currentUser;
+
+			if (!currentUser) {
+				throw new AuthenticationError('not authenticated');
+			}
+
+			currentUser.aboutMe = args.aboutMe;
+			currentUser.save();
+
+			return args.lastName;
+		},
+		changeProfile: async (roots, args, context) => {
+			const currentUser = context.currentUser;
+
+			if (!currentUser) {
+				throw new AuthenticationError('not authenticated');
+			}
+			currentUser.lastName = args.lastName;
+
+			currentUser.name = args.name;
+			currentUser.aboutMe = args.aboutMe;
+			currentUser.save();
+
+			return args.profile;
+		},
 	},
 };
+async function startServer() {
+	const server = new ApolloServer({
+		typeDefs,
+		resolvers,
+		context: async ({ req }) => {
+			const auth = req ? req.headers.authorization : null;
+			if (auth && auth.toLowerCase().startsWith('bearer ')) {
+				const decodedToken = jwt.verify(auth.substring(7), JWT_SECRET);
 
-const server = new ApolloServer({
-	typeDefs,
-	resolvers,
-	context: async ({ req }) => {
-		const auth = req ? req.headers.authorization : null;
-		if (auth && auth.toLowerCase().startsWith('bearer ')) {
-			const decodedToken = jwt.verify(auth.substring(7), JWT_SECRET);
+				const currentUser = await User.findById(decodedToken.id)
+					.populate('transactionHistory')
+					.populate('portfolioCoins')
+					.populate('portfolioValueDates')
+					.populate('sendReceiverHistories');
 
-			const currentUser = await User.findById(decodedToken.id)
-				.populate('transactionHistory')
-				.populate('portfolioCoins')
-				.populate('portfolioValueDates')
-				.populate('sendReceiverHistories');
+				return { currentUser };
+			}
+		},
+	});
+	await server.start();
 
-			return { currentUser };
-		}
-	},
-});
+	const app = express();
 
-server.listen().then(({ url }) => {
-	console.log(`Server ready at ${url}`);
-});
+	const cors = require('cors');
+
+	app.use(cors());
+
+	app.use(graphqlUploadExpress());
+
+	app.use(express.static('public'));
+
+	server.applyMiddleware({ app });
+
+	await new Promise((r) => app.listen({ port: 4000 }, r));
+
+	console.log(`🚀 Server ready at http://localhost:4000${server.graphqlPath}`);
+}
+startServer();
