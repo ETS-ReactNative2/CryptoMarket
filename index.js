@@ -89,6 +89,7 @@ const typeDefs = gql`
 	}
 	type Query {
 		userCount: Int!
+		getLimitCoins: [Coin!]
 		allUsers: [User!]!
 		getWatchListCoins: [String!]!
 		findUser(username: String!): User
@@ -108,6 +109,9 @@ const typeDefs = gql`
 		changeName(name: String!): String!
 		changeLastName(lastName: String!): String!
 		changeAboutMe(sentence: String!): String!
+		buyLimitCoins(name: String!, bought_price: Float!, quantity: Float!): Coin
+		nowBuyingCoinLimit(name: String!, bought_price: Float!, quantity: Float!, id: String!): Coin
+		cancelLimitCoin(id: String!): String
 		changeProfile(name: String!, lastName: String!, aboutMe: String!): String
 	}
 `;
@@ -115,11 +119,20 @@ const typeDefs = gql`
 const resolvers = {
 	Query: {
 		userCount: async () => User.collection.countDocuments(),
+		getLimitCoins: async (root, args,context) => {
+			const currentUser = context.currentUser;
+			if (!currentUser) {
+				throw new AuthenticationError('not authenticated');
+			}
+			return currentUser.limitCoins;
+	
+		},
 		allUsers: async (root, args) => {
 			return User.find()
 				.populate('transactionHistory')
 				.populate('portfolioCoins')
 				.populate('portfolioValueDates')
+				.populate('limitCoins')
 				.populate('sendReceiverHistories');
 		},
 		findUser: async (root, args) => User.findOne({ username: args.username }),
@@ -134,6 +147,13 @@ const resolvers = {
 	Mutation: {
 		createUser: async (root, args) => {
 			const passwordHash = await bcrypt.hash(args.password, 12);
+			const existedUser = await User.findOne({username: args.username})
+
+			if(existedUser){
+				throw new UserInputError("Username already exists", {
+					invalidArgs: args,
+				});
+			}
 			const user = new User({
 				username: args.username,
 				passwordHash,
@@ -165,6 +185,96 @@ const resolvers = {
 
 			return { value: jwt.sign(userForToken, JWT_SECRET) };
 		},
+		
+		buyLimitCoins: async (root, args,context) => {
+			//The user sends a limit request, in which this is awaiting to be processed
+			const currentUser = context.currentUser;
+			if (!currentUser) {
+				throw new AuthenticationError('not authenticated');
+			}
+			const date = new Date();
+			const coin = new Coin({
+				name: args.name,
+				quantity: args.quantity,
+				bought_price: args.bought_price,
+				type: 'BuyLimit',
+				date: date.toISOString().split('T')[0],
+			});
+			currentUser.fiatBalance -= args.quantity * args.bought_price
+			currentUser.limitCoins = currentUser.limitCoins.concat(coin);
+			await coin.save()
+			await currentUser.save()
+	
+		},
+		nowBuyingCoinLimit: async (root, args,context) => {
+
+			//The user now buys the coin limit wants it has reached to a certain price
+			const currentUser = context.currentUser;
+			await Coin.deleteOne({_id: args.id})
+			currentUser.limitCoins = currentUser.limitCoins.filter((el) => {return el.id !== args.id })
+			const date = new Date();
+			const coin = new Coin({
+				name: args.name,
+				quantity: args.quantity,
+				bought_price: args.bought_price,
+				type: 'Buy',
+				date: date.toISOString().split('T')[0],
+			});
+			let portfolioCoin;
+			if (!currentUser) {
+				throw new AuthenticationError('not authenticated');
+			}
+			portfolioCoin = await PortfolioCoin.findOne({ name: args.name, owner: currentUser.username });
+
+			try {
+				await coin.save();
+				if (!portfolioCoin) {
+					portfolioCoin = new PortfolioCoin({
+						name: args.name,
+						quantity: args.quantity,
+						owner: currentUser.username,
+					});
+					currentUser.portfolioCoins = currentUser.portfolioCoins.concat(portfolioCoin);
+				} else {
+					portfolioCoin.quantity = portfolioCoin.quantity + args.quantity;
+					const idx = currentUser.portfolioCoins.findIndex((el) => el.name === portfolioCoin.name);
+					currentUser.portfolioCoins[idx] = portfolioCoin;
+				}
+				await portfolioCoin.save();
+		
+				currentUser.transactionHistory = currentUser.transactionHistory.concat(coin);
+				await currentUser.save();
+			} catch (error) {
+				console.log('error here');
+				throw new UserInputError(error.message, {
+					invalidArgs: args,
+				});
+			}
+			return coin;
+			
+	
+		},
+		
+		cancelLimitCoin: async (root, args,context) => {
+			//The user cancels the limit to buy the coin
+			const currentUser = context.currentUser;
+			if (!currentUser) {
+				throw new AuthenticationError('not authenticated');
+			}
+			const coin = await Coin.findById(args.id)
+			if(Coin.type === "BuyLimit"){
+				currentUser.fiatBalance += args.quantity * args.bought_price
+			}
+			await Coin.deleteOne({_id: args.id})
+			
+			currentUser.limitCoins = currentUser.limitCoins.concat(coin);
+			currentUser.limitCoins = currentUser.limitCoins.filter((el) => {return el.id !== args.id })
+			await currentUser.save()
+			return args.id
+	
+		},
+
+		
 		buyMarketCoin: async (root, args, context) => {
 			const currentUser = context.currentUser;
 			const date = new Date();
@@ -343,10 +453,11 @@ const resolvers = {
 				throw new AuthenticationError('not authenticated');
 			}
 			const receiverUser = await User.findOne({ username: args.username })
-				.populate('transactionHistory')
-				.populate('portfolioCoins')
-				.populate('portfolioValueDates')
-				.populate('sendReceiverHistories');
+			.populate('transactionHistory')
+			.populate('portfolioCoins')
+			.populate('portfolioValueDates')
+			.populate('limitCoins')
+			.populate('sendReceiverHistories');
 			if (!receiverUser)
 				throw new UserInputError({
 					invalidArgs: args,
@@ -486,10 +597,13 @@ async function startServer() {
 				const decodedToken = jwt.verify(auth.substring(7), JWT_SECRET);
 
 				const currentUser = await User.findById(decodedToken.id)
-					.populate('transactionHistory')
-					.populate('portfolioCoins')
-					.populate('portfolioValueDates')
-					.populate('sendReceiverHistories');
+				.populate('transactionHistory')
+				.populate('portfolioCoins')
+				.populate('portfolioValueDates')
+				.populate('limitCoins')
+				.populate('sendReceiverHistories');
+					
+				
 
 				return { currentUser };
 			}

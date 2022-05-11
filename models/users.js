@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const schema = new mongoose.Schema({
-	username: String,
+	username:String,
 	name: String,
 	lastName: String,
 	fiatBalance: Number,
@@ -32,5 +32,7 @@ const schema = new mongoose.Schema({
 	portfolioValueDates: [{ type: mongoose.Schema.Types.ObjectId, ref: 'PortfolioValueDate' }],
 	sendReceiverHistories: [{ type: mongoose.Schema.Types.ObjectId, ref: 'SendReceiveHistory' }],
 });
+
+
 
 module.exports = mongoose.model('User', schema);
