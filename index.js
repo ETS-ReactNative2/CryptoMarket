@@ -111,6 +111,8 @@ const typeDefs = gql`
 		changeAboutMe(sentence: String!): String!
 		buyLimitCoins(name: String!, bought_price: Float!, quantity: Float!): Coin
 		nowBuyingCoinLimit(name: String!, bought_price: Float!, quantity: Float!, id: String!): Coin
+		sellLimitCoins(name: String!, sell_price: Float!, quantity: Float!): Coin
+		nowSellLimitCoin(name: String!, sell_price: Float!, quantity: Float!, id: String!): Coin
 		cancelLimitCoin(id: String!): String
 		changeProfile(name: String!, lastName: String!, aboutMe: String!): String
 	}
@@ -206,6 +208,61 @@ const resolvers = {
 			await currentUser.save()
 	
 		},
+		nowSellLimitCoin: async (root, args, context) => {
+			const currentUser = context.currentUser;
+			await Coin.deleteOne({_id: args.id})
+			currentUser.limitCoins = currentUser.limitCoins.filter((el) => {return el.id !== args.id })
+			const date = new Date();
+			const coin = new Coin({
+				name: args.name,
+				quantity: args.quantity,
+				bought_price: args.sell_price,
+				type: 'Sell',
+				date: date.toISOString().split('T')[0],
+			});
+			//TODO schema that defines whether it is a sell or buy
+			const portfolioCoin = await PortfolioCoin.findOne({
+				name: args.name,
+				owner: currentUser.username,
+			});
+			try {
+				await coin.save();
+				portfolioCoin.quantity = portfolioCoin.quantity - args.quantity;
+				const idx = currentUser.portfolioCoins.findIndex((el) => el.name === portfolioCoin.name);
+				currentUser.portfolioCoins[idx] = portfolioCoin;
+
+				await portfolioCoin.save();
+				currentUser.transactionHistory = currentUser.transactionHistory.concat(coin);
+				currentUser.fiatBalance += args.sell_price * args.quantity;
+				await currentUser.save();
+			} catch (error) {
+				console.log('sell error');
+				throw new UserInputError(error.message, {
+					invalidArgs: args,
+				});
+			}
+			return coin;
+		},
+		sellLimitCoins: async (root, args,context) => {
+			//The user sends a limit request, in which this is awaiting to be processed
+			const currentUser = context.currentUser;
+			if (!currentUser) {
+				throw new AuthenticationError('not authenticated');
+			}
+			const date = new Date();
+			const coin = new Coin({
+				name: args.name,
+				quantity: args.quantity,
+				bought_price: args.sell_price,
+				type: 'SellLimit',
+				date: date.toISOString().split('T')[0],
+			});
+			currentUser.limitCoins = currentUser.limitCoins.concat(coin);
+			await coin.save()
+			await currentUser.save()
+	
+		},
+		
 		nowBuyingCoinLimit: async (root, args,context) => {
 
 			//The user now buys the coin limit wants it has reached to a certain price
@@ -262,12 +319,12 @@ const resolvers = {
 				throw new AuthenticationError('not authenticated');
 			}
 			const coin = await Coin.findById(args.id)
-			if(Coin.type === "BuyLimit"){
-				currentUser.fiatBalance += args.quantity * args.bought_price
+			if(coin.type === "BuyLimit"){
+				currentUser.fiatBalance += coin.quantity * coin.bought_price
 			}
+
 			await Coin.deleteOne({_id: args.id})
 			
-			currentUser.limitCoins = currentUser.limitCoins.concat(coin);
 			currentUser.limitCoins = currentUser.limitCoins.filter((el) => {return el.id !== args.id })
 			await currentUser.save()
 			return args.id
