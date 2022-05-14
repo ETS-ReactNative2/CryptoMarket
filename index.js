@@ -450,7 +450,6 @@ const resolvers = {
 			}
 			try {
 				currentUser.watchListCoins = currentUser.watchListCoins.filter((el) => el !== args.coin);
-				currentUser.fiatBalance -= args.bought_price * args.quantity;
 				await currentUser.save();
 			} catch (error) {
 				console.log('error here');
