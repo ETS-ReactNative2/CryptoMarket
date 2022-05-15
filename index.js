@@ -10,6 +10,7 @@ const { GraphQLUpload, graphqlUploadExpress } = require('graphql-upload');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const express = require('express');
+const path = require('path');
 
 const path = require('path');
 const fs = require('fs');
@@ -763,8 +764,12 @@ async function startServer() {
 	app.use(express.static('public'));
 
 	server.applyMiddleware({ app });
-
-	await new Promise((r) => app.listen({ port: 4000 }, r));
+	const PORT = process.env.PORT || 4000;
+	app.use(express.static('build'));
+	app.get('*', (req, res) => {
+		res.sendFile(path.resolve(__dirname, 'build', 'index.html'));
+	});
+	await new Promise((r) => app.listen({ port: PORT }, r));
 
 	console.log(`🚀 Server ready at http://localhost:4000${server.graphqlPath}`);
 }
