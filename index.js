@@ -7,6 +7,8 @@ const PortfolioCoin = require('./models/portfolioCoin'); // INFO of the portfoli
 const PortfolioValueDate = require('./models/portfolioValueDate'); //Dates of each of the portfolio vvalue
 const SendReceiveHistory = require('./models/sendReceiveHistory');
 const { GraphQLUpload, graphqlUploadExpress } = require('graphql-upload');
+const axios = require('axios');
+const cheerio = require('cheerio');
 const express = require('express');
 
 const path = require('path');
@@ -14,6 +16,7 @@ const fs = require('fs');
 const bcrypt = require('bcrypt');
 
 const JWT_SECRET = 'DANIELZHANG';
+const siteUrl = 'https://coinmarketcap.com/';
 
 // password TKS1032801 Username Guan_Ha
 
@@ -36,6 +39,11 @@ const typeDefs = gql`
 		lastName: String
 		aboutMe: String
 		name: String
+	}
+	type coinResult {
+		Images: String!
+		name: String!
+		price: String!
 	}
 	type PortfolioValueDate {
 		assetValueTotal: Float!
@@ -93,6 +101,8 @@ const typeDefs = gql`
 		allUsers: [User!]!
 		getWatchListCoins: [String!]!
 		findUser(username: String!): User
+		getNewlyAddedCoins: [coinResult!]!
+		getBiggestGainers: [coinResult!]!
 		me: User
 	}
 
@@ -118,16 +128,85 @@ const typeDefs = gql`
 	}
 `;
 
+async function getNewlyAdded() {
+	try {
+		const { data } = await axios({
+			method: 'GET',
+			url: siteUrl,
+		});
+
+		const $ = cheerio.load(data);
+
+		const keys = ['name', 'price'];
+
+		const coinArr = [];
+
+		const elemSelector =
+			'#__next > div > div.main-content > div.sc-57oli2-0.comDeo.cmc-body-wrapper > div > div > div.sc-1rmt1nr-0.sc-1rmt1nr-2.iMyvIy > div:nth-child(3) > div:not(:nth-child(1))';
+		$(elemSelector).each((parentIndx, parentElem) => {
+			const coinObj = { Images: $(parentElem).find('img').attr('src') };
+
+			$(parentElem)
+				.children()
+				.each((childIdx, childElem) => {
+					let text = $(childElem).text();
+					if (childIdx === 0) {
+						text = text.slice(1, text.length);
+					}
+					coinObj[keys[childIdx]] = text;
+				});
+			coinArr.push(coinObj);
+		});
+		return coinArr;
+	} catch (error) {
+		console.error(error);
+	}
+}
+
+async function getBiggestGainers() {
+	try {
+		const { data } = await axios({
+			method: 'GET',
+			url: siteUrl,
+		});
+
+		const $ = cheerio.load(data);
+
+		const keys = ['name', 'price'];
+
+		const coinArr = [];
+
+		const elemSelector =
+			'#__next > div > div.main-content > div.sc-57oli2-0.comDeo.cmc-body-wrapper > div > div > div.sc-1rmt1nr-0.sc-1rmt1nr-2.iMyvIy > div:nth-child(2) > div:not(:nth-child(1))';
+		$(elemSelector).each((parentIndx, parentElem) => {
+			const coinObj = { Images: $(parentElem).find('img').attr('src') };
+
+			$(parentElem)
+				.children()
+				.each((childIdx, childElem) => {
+					let text = $(childElem).text();
+					if (childIdx === 0) {
+						text = text.slice(1, text.length);
+					}
+					coinObj[keys[childIdx]] = text;
+				});
+			coinArr.push(coinObj);
+		});
+		return coinArr;
+	} catch (error) {
+		console.error(error);
+	}
+}
+
 const resolvers = {
 	Query: {
 		userCount: async () => User.collection.countDocuments(),
-		getLimitCoins: async (root, args,context) => {
+		getLimitCoins: async (root, args, context) => {
 			const currentUser = context.currentUser;
 			if (!currentUser) {
 				throw new AuthenticationError('not authenticated');
 			}
 			return currentUser.limitCoins;
-	
 		},
 		allUsers: async (root, args) => {
 			return User.find()
@@ -144,15 +223,24 @@ const resolvers = {
 		getWatchListCoins: async (root, args, context) => {
 			return context.currentUser.watchListCoins;
 		},
+		getNewlyAddedCoins: async (root, args) => {
+			const addedCoins = await getNewlyAdded();
+			return addedCoins;
+		},
+
+		getBiggestGainers: async (root, args) => {
+			const biggestGainers = await getBiggestGainers();
+			return biggestGainers;
+		},
 	},
 	Upload: GraphQLUpload,
 	Mutation: {
 		createUser: async (root, args) => {
 			const passwordHash = await bcrypt.hash(args.password, 12);
-			const existedUser = await User.findOne({username: args.username})
+			const existedUser = await User.findOne({ username: args.username });
 
-			if(existedUser){
-				throw new UserInputError("Username already exists", {
+			if (existedUser) {
+				throw new UserInputError('Username already exists', {
 					invalidArgs: args,
 				});
 			}
@@ -187,8 +275,8 @@ const resolvers = {
 
 			return { value: jwt.sign(userForToken, JWT_SECRET) };
 		},
-		
-		buyLimitCoins: async (root, args,context) => {
+
+		buyLimitCoins: async (root, args, context) => {
 			//The user sends a limit request, in which this is awaiting to be processed
 			const currentUser = context.currentUser;
 			if (!currentUser) {
@@ -202,16 +290,17 @@ const resolvers = {
 				type: 'BuyLimit',
 				date: date.toISOString().split('T')[0],
 			});
-			currentUser.fiatBalance -= args.quantity * args.bought_price
+			currentUser.fiatBalance -= args.quantity * args.bought_price;
 			currentUser.limitCoins = currentUser.limitCoins.concat(coin);
-			await coin.save()
-			await currentUser.save()
-	
+			await coin.save();
+			await currentUser.save();
 		},
 		nowSellLimitCoin: async (root, args, context) => {
 			const currentUser = context.currentUser;
-			await Coin.deleteOne({_id: args.id})
-			currentUser.limitCoins = currentUser.limitCoins.filter((el) => {return el.id !== args.id })
+			await Coin.deleteOne({ _id: args.id });
+			currentUser.limitCoins = currentUser.limitCoins.filter((el) => {
+				return el.id !== args.id;
+			});
 			const date = new Date();
 			const coin = new Coin({
 				name: args.name,
@@ -243,7 +332,7 @@ const resolvers = {
 			}
 			return coin;
 		},
-		sellLimitCoins: async (root, args,context) => {
+		sellLimitCoins: async (root, args, context) => {
 			//The user sends a limit request, in which this is awaiting to be processed
 			const currentUser = context.currentUser;
 			if (!currentUser) {
@@ -258,17 +347,17 @@ const resolvers = {
 				date: date.toISOString().split('T')[0],
 			});
 			currentUser.limitCoins = currentUser.limitCoins.concat(coin);
-			await coin.save()
-			await currentUser.save()
-	
+			await coin.save();
+			await currentUser.save();
 		},
-		
-		nowBuyingCoinLimit: async (root, args,context) => {
 
+		nowBuyingCoinLimit: async (root, args, context) => {
 			//The user now buys the coin limit wants it has reached to a certain price
 			const currentUser = context.currentUser;
-			await Coin.deleteOne({_id: args.id})
-			currentUser.limitCoins = currentUser.limitCoins.filter((el) => {return el.id !== args.id })
+			await Coin.deleteOne({ _id: args.id });
+			currentUser.limitCoins = currentUser.limitCoins.filter((el) => {
+				return el.id !== args.id;
+			});
 			const date = new Date();
 			const coin = new Coin({
 				name: args.name,
@@ -298,7 +387,7 @@ const resolvers = {
 					currentUser.portfolioCoins[idx] = portfolioCoin;
 				}
 				await portfolioCoin.save();
-		
+
 				currentUser.transactionHistory = currentUser.transactionHistory.concat(coin);
 				await currentUser.save();
 			} catch (error) {
@@ -308,30 +397,28 @@ const resolvers = {
 				});
 			}
 			return coin;
-			
-	
 		},
-		
-		cancelLimitCoin: async (root, args,context) => {
+
+		cancelLimitCoin: async (root, args, context) => {
 			//The user cancels the limit to buy the coin
 			const currentUser = context.currentUser;
 			if (!currentUser) {
 				throw new AuthenticationError('not authenticated');
 			}
-			const coin = await Coin.findById(args.id)
-			if(coin.type === "BuyLimit"){
-				currentUser.fiatBalance += coin.quantity * coin.bought_price
+			const coin = await Coin.findById(args.id);
+			if (coin.type === 'BuyLimit') {
+				currentUser.fiatBalance += coin.quantity * coin.bought_price;
 			}
 
-			await Coin.deleteOne({_id: args.id})
-			
-			currentUser.limitCoins = currentUser.limitCoins.filter((el) => {return el.id !== args.id })
-			await currentUser.save()
-			return args.id
-	
+			await Coin.deleteOne({ _id: args.id });
+
+			currentUser.limitCoins = currentUser.limitCoins.filter((el) => {
+				return el.id !== args.id;
+			});
+			await currentUser.save();
+			return args.id;
 		},
 
-		
 		buyMarketCoin: async (root, args, context) => {
 			const currentUser = context.currentUser;
 			const date = new Date();
@@ -509,11 +596,11 @@ const resolvers = {
 				throw new AuthenticationError('not authenticated');
 			}
 			const receiverUser = await User.findOne({ username: args.username })
-			.populate('transactionHistory')
-			.populate('portfolioCoins')
-			.populate('portfolioValueDates')
-			.populate('limitCoins')
-			.populate('sendReceiverHistories');
+				.populate('transactionHistory')
+				.populate('portfolioCoins')
+				.populate('portfolioValueDates')
+				.populate('limitCoins')
+				.populate('sendReceiverHistories');
 			if (!receiverUser)
 				throw new UserInputError({
 					invalidArgs: args,
@@ -653,13 +740,11 @@ async function startServer() {
 				const decodedToken = jwt.verify(auth.substring(7), JWT_SECRET);
 
 				const currentUser = await User.findById(decodedToken.id)
-				.populate('transactionHistory')
-				.populate('portfolioCoins')
-				.populate('portfolioValueDates')
-				.populate('limitCoins')
-				.populate('sendReceiverHistories');
-					
-				
+					.populate('transactionHistory')
+					.populate('portfolioCoins')
+					.populate('portfolioValueDates')
+					.populate('limitCoins')
+					.populate('sendReceiverHistories');
 
 				return { currentUser };
 			}
