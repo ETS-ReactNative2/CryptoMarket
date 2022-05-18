@@ -16,6 +16,7 @@ const fs = require('fs');
 const bcrypt = require('bcrypt');
 
 const JWT_SECRET = 'DANIELZHANG';
+process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = 0;
 const siteUrl = 'https://coinmarketcap.com/';
 
 // password TKS1032801 Username Guan_Ha
@@ -764,10 +765,10 @@ async function startServer() {
 
 	server.applyMiddleware({ app });
 	const PORT = process.env.PORT || 4000;
-	app.use(express.static(path.join(__dirname, 'build')));
-	app.get('*', (req, res) => {
-		res.sendFile(path.resolve(__dirname, 'build', 'index.html'));
-	});
+	// app.use(express.static(path.join(__dirname, 'build')));
+	// app.get('*', (req, res) => {
+	// 	res.sendFile(path.resolve(__dirname, 'build', 'index.html'));
+	// });
 	await new Promise((r) => app.listen({ port: PORT }, r));
 
 	console.log(`🚀 Server ready at http://localhost:4000${server.graphqlPath}`);
